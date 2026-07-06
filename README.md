@@ -29,6 +29,36 @@ Plataforma multi-tenant de inferência de IA assíncrona: recebe requisições v
 | `docs/06-testing-strategy.md` | Estratégia de testes e disciplina TDD |
 | `docs/specs/` | Specs por feature (fonte da verdade para implementação) |
 
+## Desenvolvimento local
+
+### Pré-requisitos
+- Python 3.12+
+- Docker e Docker Compose
+
+### Setup
+
+```bash
+# Criar ambiente virtual
+python -m venv .venv
+source .venv/bin/activate  # Linux/macOS
+
+# Instalar dependências
+pip install -e ".[dev]"
+
+# Copiar variáveis de ambiente
+cp .env.example .env
+# Editar .env com suas configurações
+
+# Subir infra local
+docker compose up -d postgres rabbitmq minio redis
+
+# Aplicar migrações
+alembic upgrade head
+
+# Rodar testes
+pytest
+```
+
 ## Workflow de desenvolvimento (spec-driven + TDD)
 
 1. **Spec primeiro.** Nenhuma feature entra em código sem uma `SPEC-NNN` aprovada em `docs/specs/`, com critérios de aceitação no formato EARS e plano de testes.
