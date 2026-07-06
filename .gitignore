@@ -7,3 +7,6 @@ dist/
 *.egg-info/
 .coverage
 htmlcov/
+.DS_Store
+.venv/
+venv/
