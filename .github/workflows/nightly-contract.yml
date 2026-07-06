@@ -1,0 +1,20 @@
+name: Nightly Contract Tests
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+jobs:
+  contract-tests:
+    name: Contract Tests (Live Backends)
+    runs-on: ubuntu-latest
+    if: false  # Ativar quando runner com Ollama/vLLM estiver configurado
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: pytest tests/contract/ -v -m live_backend --tb=short
