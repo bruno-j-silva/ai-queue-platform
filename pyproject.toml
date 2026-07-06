@@ -32,6 +32,9 @@ dev = [
     "types-redis",
 ]
 
+[tool.hatch.build.targets.wheel]
+packages = ["api", "shared", "workers"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
