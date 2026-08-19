@@ -1,0 +1,416 @@
+"""
+Integration tests for POST /v1/jobs — SPEC-001 Acceptance Criteria.
+
+TDD RED phase: tests written before implementation. All must fail initially.
+
+Uses:
+- httpx.AsyncClient with the FastAPI app
+- dependency_overrides to isolate auth and DB
+- testcontainers.postgres for a real Postgres instance
+"""
+
+from __future__ import annotations
+
+import os
+import uuid
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime
+
+import pytest
+from alembic import command
+from alembic.config import Config
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from shared.auth.api_key import TenantIdentity
+from shared.auth.dependencies import _get_db, get_current_tenant
+from shared.models import (  # noqa: F401 — registers all models in Base.metadata
+    Job,
+    ModelCatalog,
+    Outbox,
+    Plan,
+    PlanModel,
+    Tenant,
+)
+from shared.models.model_catalog import ModelBackend, ModelStatus
+from shared.models.tenant import TenantStatus
+
+# ---------------------------------------------------------------------------
+# Module-scoped Postgres container + migration
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def postgres_url() -> dict[str, str]:
+    """Spin up a real Postgres container once per module."""
+    from testcontainers.postgres import PostgresContainer
+
+    with PostgresContainer("postgres:16") as pg:
+        sync_url = pg.get_connection_url().replace("psycopg2", "psycopg")
+        if "postgresql+psycopg://" not in sync_url:
+            sync_url = sync_url.replace("postgresql://", "postgresql+psycopg://")
+        async_url = sync_url
+        yield {"sync": sync_url, "async": async_url}
+
+
+@pytest.fixture(scope="module")
+def migrated_db(postgres_url: dict[str, str]) -> dict[str, str]:
+    """Run Alembic migrations once for the whole module."""
+    original = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = postgres_url["sync"]
+    try:
+        cfg = Config("alembic.ini")
+        cfg.set_main_option("sqlalchemy.url", postgres_url["sync"])
+        command.upgrade(cfg, "head")
+    finally:
+        if original is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = original
+    return postgres_url
+
+
+# ---------------------------------------------------------------------------
+# Per-test session with rollback
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+async def async_engine(migrated_db: dict[str, str]):
+    engine = create_async_engine(migrated_db["async"], echo=False)
+    yield engine
+    await engine.dispose()
+
+
+@pytest.fixture()
+async def async_session(async_engine) -> AsyncIterator[AsyncSession]:
+    """Provide a fresh AsyncSession rolled back after each test."""
+    factory = async_sessionmaker(async_engine, expire_on_commit=False)
+    async with factory() as session:
+        async with session.begin():
+            yield session
+            await session.rollback()
+
+
+# ---------------------------------------------------------------------------
+# Domain seed fixtures (no hardcoding of IDs)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+async def seed_plan(async_session: AsyncSession) -> Plan:
+    """Insert a Plan that allows model 'test-model' with max_timeout=300."""
+    plan = Plan(
+        id=uuid.uuid4(),
+        name="starter",
+        priority_weight=10,
+        max_timeout_seconds=300,
+        result_ttl_days=7,
+        max_payload_mb=10,
+    )
+    async_session.add(plan)
+    await async_session.flush()
+    return plan
+
+
+@pytest.fixture()
+async def seed_tenant(async_session: AsyncSession, seed_plan: Plan) -> Tenant:
+    """Insert an active Tenant linked to seed_plan."""
+    now = datetime.now(UTC)
+    tenant = Tenant(
+        id=uuid.uuid4(),
+        name="Test Tenant",
+        plan_id=seed_plan.id,
+        status=TenantStatus.active,
+        created_at=now,
+        updated_at=now,
+    )
+    async_session.add(tenant)
+    await async_session.flush()
+    return tenant
+
+
+@pytest.fixture()
+async def seed_model(async_session: AsyncSession) -> ModelCatalog:
+    """Insert a ModelCatalog entry."""
+    model = ModelCatalog(
+        id="test-model",
+        backend=ModelBackend.ollama,
+        backend_model_name="llama3",
+        status=ModelStatus.active,
+    )
+    async_session.add(model)
+    await async_session.flush()
+    return model
+
+
+@pytest.fixture()
+async def seed_plan_model(
+    async_session: AsyncSession, seed_plan: Plan, seed_model: ModelCatalog
+) -> PlanModel:
+    """Link model to plan."""
+    pm = PlanModel(plan_id=seed_plan.id, model_id=seed_model.id)
+    async_session.add(pm)
+    await async_session.flush()
+    return pm
+
+
+# ---------------------------------------------------------------------------
+# App client factory with dependency overrides
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def make_client(
+    async_session: AsyncSession,
+    seed_tenant: Tenant,
+):
+    """
+    Returns a context-manager factory that builds an AsyncClient with:
+    - DB overridden to async_session
+    - auth overridden to inject a fake TenantIdentity
+    """
+    from api.main import app  # imported here so DATABASE_URL is already set
+
+    async def _get_db_override() -> AsyncIterator[AsyncSession]:
+        yield async_session
+
+    def _build(tenant_id: uuid.UUID | None = None, authenticated: bool = True) -> AsyncClient:
+        real_tenant_id = tenant_id or seed_tenant.id
+
+        async def _auth_override() -> TenantIdentity:
+            if not authenticated:
+                from fastapi import HTTPException
+
+                raise HTTPException(status_code=401, detail="Invalid or revoked API key.")
+            return TenantIdentity(
+                tenant_id=str(real_tenant_id),
+                api_key_id=str(uuid.uuid4()),
+            )
+
+        overrides = {_get_db: _get_db_override}
+        if authenticated:
+            overrides[get_current_tenant] = _auth_override  # type: ignore[assignment]
+        else:
+            overrides[get_current_tenant] = _auth_override  # type: ignore[assignment]
+
+        app.dependency_overrides = overrides
+        return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+
+    return _build
+
+
+# ---------------------------------------------------------------------------
+# AC-01: valid submission → 202, job persisted, outbox created in same tx
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_spec001_ac01_valid_submit_returns_202_and_persists(
+    make_client,
+    seed_tenant: Tenant,
+    seed_model: ModelCatalog,
+    seed_plan_model: PlanModel,
+    async_session: AsyncSession,
+) -> None:
+    """Valid payload → 202, job status='queued', outbox entry created atomically."""
+    from sqlalchemy import select
+
+    async with make_client() as client:
+        response = await client.post(
+            "/v1/jobs",
+            json={
+                "model": seed_model.id,
+                "input": {"messages": [{"role": "user", "content": "Hello"}]},
+                "timeout_seconds": 30,
+            },
+        )
+
+    assert response.status_code == 202, response.text
+    body = response.json()
+    assert body["status"] == "queued"
+    assert "job_id" in body
+    assert "created_at" in body
+
+    # Verify job persisted in DB
+    job_id = uuid.UUID(body["job_id"])
+    result = await async_session.execute(
+        select(Job).where(Job.id == job_id, Job.tenant_id == seed_tenant.id)
+    )
+    job = result.scalar_one_or_none()
+    assert job is not None
+    assert job.status.value == "queued"
+
+    # Verify outbox entry created in same transaction
+    outbox_result = await async_session.execute(
+        select(Outbox).where(Outbox.topic == "inference.dispatch")
+    )
+    outbox_entries = outbox_result.scalars().all()
+    assert len(outbox_entries) >= 1
+    matching = [e for e in outbox_entries if e.payload.get("job_id") == str(job_id)]
+    assert len(matching) == 1
+    assert matching[0].payload["model_id"] == seed_model.id
+    assert matching[0].payload["tenant_id"] == str(seed_tenant.id)
+
+
+# ---------------------------------------------------------------------------
+# AC-03a: invalid model_id → 422 with problem+json
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_spec001_ac03_invalid_model_422(
+    make_client,
+    seed_plan_model: PlanModel,
+) -> None:
+    """model_id not in catalog → 422 problem+json with title about model."""
+    async with make_client() as client:
+        response = await client.post(
+            "/v1/jobs",
+            json={
+                "model": "nonexistent-model",
+                "input": {"messages": [{"role": "user", "content": "Hello"}]},
+                "timeout_seconds": 30,
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.headers["content-type"].startswith("application/problem+json")
+    body = response.json()
+    assert "model" in body.get("detail", "").lower() or "model" in body.get("title", "").lower()
+
+
+# ---------------------------------------------------------------------------
+# AC-03b: model not in tenant's plan → 422
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_spec001_ac03_model_not_in_plan_422(
+    make_client,
+    async_session: AsyncSession,
+    seed_plan: Plan,
+    seed_model: ModelCatalog,
+) -> None:
+    """model_id exists in catalog but NOT in tenant's plan → 422."""
+    # Intentionally do NOT create seed_plan_model so model is not linked to plan
+    async with make_client() as client:
+        response = await client.post(
+            "/v1/jobs",
+            json={
+                "model": seed_model.id,
+                "input": {"messages": [{"role": "user", "content": "Hello"}]},
+                "timeout_seconds": 30,
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.headers["content-type"].startswith("application/problem+json")
+    body = response.json()
+    assert "plan" in body.get("detail", "").lower() or "model" in body.get("detail", "").lower()
+
+
+# ---------------------------------------------------------------------------
+# AC-04: no/invalid auth token → 401
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_spec001_ac04_invalid_key_401(
+    make_client,
+    seed_model: ModelCatalog,
+    seed_plan_model: PlanModel,
+) -> None:
+    """Missing/invalid Bearer token → 401."""
+    async with make_client(authenticated=False) as client:
+        response = await client.post(
+            "/v1/jobs",
+            json={
+                "model": seed_model.id,
+                "input": {"messages": [{"role": "user", "content": "Hello"}]},
+                "timeout_seconds": 30,
+            },
+        )
+
+    assert response.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# AC-05: idempotency — repeated key returns original job
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_spec001_ac05_idempotency_returns_original(
+    make_client,
+    seed_model: ModelCatalog,
+    seed_plan_model: PlanModel,
+    async_session: AsyncSession,
+    seed_tenant: Tenant,
+) -> None:
+    """Same (tenant_id, idempotency_key) twice → second call returns original job, no duplicate."""
+    from sqlalchemy import select
+
+    idem_key = f"idem-{uuid.uuid4()}"
+    payload = {
+        "model": seed_model.id,
+        "input": {"messages": [{"role": "user", "content": "idempotent"}]},
+        "timeout_seconds": 30,
+    }
+
+    async with make_client() as client:
+        headers = {"Idempotency-Key": idem_key}
+        first_response = await client.post("/v1/jobs", json=payload, headers=headers)
+        second_response = await client.post("/v1/jobs", json=payload, headers=headers)
+
+    assert first_response.status_code == 202
+    assert second_response.status_code == 200
+
+    first_body = first_response.json()
+    second_body = second_response.json()
+
+    # Both must return the same job_id
+    assert first_body["job_id"] == second_body["job_id"]
+
+    # Only one job must exist in DB with this idempotency_key
+    result = await async_session.execute(
+        select(Job).where(
+            Job.tenant_id == seed_tenant.id,
+            Job.idempotency_key == idem_key,
+        )
+    )
+    jobs = result.scalars().all()
+    assert len(jobs) == 1
+
+
+# ---------------------------------------------------------------------------
+# AC-07: timeout exceeds plan cap → 422 with max_timeout in detail
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_spec001_ac07_timeout_above_plan_cap_422(
+    make_client,
+    seed_model: ModelCatalog,
+    seed_plan_model: PlanModel,
+    seed_plan: Plan,
+) -> None:
+    """timeout_seconds > plan.max_timeout_seconds → 422 with max_timeout in body."""
+    over_limit = seed_plan.max_timeout_seconds + 1
+
+    async with make_client() as client:
+        response = await client.post(
+            "/v1/jobs",
+            json={
+                "model": seed_model.id,
+                "input": {"messages": [{"role": "user", "content": "Hello"}]},
+                "timeout_seconds": over_limit,
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.headers["content-type"].startswith("application/problem+json")
+    body = response.json()
+    # detail must mention the cap value
+    detail = body.get("detail", "")
+    assert str(seed_plan.max_timeout_seconds) in detail or "timeout" in detail.lower()

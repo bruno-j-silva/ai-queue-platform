@@ -1,5 +1,6 @@
-import enum
 import uuid
+from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Enum, ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID
@@ -7,8 +8,12 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from shared.db.base import Base
 
+if TYPE_CHECKING:
+    from shared.models.tenant import Tenant
+    from shared.models.webhook_delivery import WebhookDelivery
 
-class WebhookEndpointStatus(str, enum.Enum):
+
+class WebhookEndpointStatus(StrEnum):
     active = "active"
     disabled = "disabled"
 

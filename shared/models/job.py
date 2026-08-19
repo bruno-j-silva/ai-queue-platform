@@ -1,6 +1,7 @@
-import enum
 import uuid
 from datetime import datetime
+from enum import StrEnum
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import Boolean, Enum, ForeignKey, Index, Integer, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -8,8 +9,14 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from shared.db.base import Base
 
+if TYPE_CHECKING:
+    from shared.models.job_event import JobEvent
+    from shared.models.model_catalog import ModelCatalog
+    from shared.models.tenant import Tenant
+    from shared.models.webhook_delivery import WebhookDelivery
 
-class JobStatus(str, enum.Enum):
+
+class JobStatus(StrEnum):
     queued = "queued"
     running = "running"
     succeeded = "succeeded"
@@ -34,17 +41,15 @@ class Job(Base):
         Enum(JobStatus, name="job_status"), nullable=False, default=JobStatus.queued
     )
     priority_weight: Mapped[int] = mapped_column(Integer, nullable=False)
-    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    result_inline: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    result_artifact_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True
-    )
-    error: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    result_inline: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
+    result_artifact_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    error: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
     idempotency_key: Mapped[str | None] = mapped_column(String, nullable=True)
     cancel_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    usage: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    usage: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     queued_at: Mapped[datetime] = mapped_column(nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(nullable=True)

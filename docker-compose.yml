@@ -1,4 +1,61 @@
 services:
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment: &app-environment
+      DATABASE_URL: postgresql+psycopg://enfila:enfila@postgres:5432/enfila
+      RABBITMQ_URL: amqp://enfila:enfila@rabbitmq:5672/
+      REDIS_URL: redis://redis:6379/0
+      OLLAMA_URL: http://ollama:11434
+      BACKEND_MODE: ${BACKEND_MODE:-ollama}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build: .
+    environment: *app-environment
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: ["celery", "-A", "workers.celery_app:app", "worker", "--loglevel=INFO"]
+    environment: *app-environment
+    ports:
+      - "${WORKER_METRICS_PORT:-9100}:9100"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  relay:
+    build: .
+    command: ["python", "-m", "workers.outbox_relay"]
+    environment: *app-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
   postgres:
     image: postgres:16
     environment:
@@ -10,7 +67,7 @@ services:
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U enfila -d enfila"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-enfila} -d ${POSTGRES_DB:-enfila}"]
       interval: 5s
       timeout: 5s
       retries: 10

@@ -1,6 +1,7 @@
-import enum
 import uuid
 from datetime import datetime
+from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Enum, ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID
@@ -8,8 +9,15 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from shared.db.base import Base
 
+if TYPE_CHECKING:
+    from shared.models.api_key import ApiKey
+    from shared.models.artifact import Artifact
+    from shared.models.job import Job
+    from shared.models.plan import Plan
+    from shared.models.webhook_endpoint import WebhookEndpoint
 
-class TenantStatus(str, enum.Enum):
+
+class TenantStatus(StrEnum):
     active = "active"
     suspended = "suspended"
 

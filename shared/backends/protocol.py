@@ -1,21 +1,21 @@
-from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from dataclasses import dataclass
+from typing import Any, Protocol, runtime_checkable
 
 
 @dataclass
 class InferenceRequest:
     job_id: str
     model_id: str
-    messages: list[dict]
-    params: dict
+    messages: list[dict[str, Any]]
+    params: dict[str, Any]
     timeout_seconds: int
     attempt: int = 0
 
 
 @dataclass
 class InferenceResult:
-    output: list[dict]
-    usage: dict  # {input_tokens, output_tokens, duration_ms, backend}
+    output: list[dict[str, Any]]
+    usage: dict[str, Any]  # {input_tokens, output_tokens, duration_ms, backend}
 
 
 class CancelToken:

@@ -1,6 +1,7 @@
-import enum
 import uuid
 from datetime import datetime
+from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from sqlalchemy import BigInteger, Enum, ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID
@@ -8,8 +9,11 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from shared.db.base import Base
 
+if TYPE_CHECKING:
+    from shared.models.tenant import Tenant
 
-class ArtifactKind(str, enum.Enum):
+
+class ArtifactKind(StrEnum):
     input = "input"
     output = "output"
 

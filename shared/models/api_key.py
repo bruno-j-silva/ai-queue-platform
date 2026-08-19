@@ -1,6 +1,7 @@
-import enum
 import uuid
 from datetime import datetime
+from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Enum, ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID
@@ -8,8 +9,11 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from shared.db.base import Base
 
+if TYPE_CHECKING:
+    from shared.models.tenant import Tenant
 
-class ApiKeyStatus(str, enum.Enum):
+
+class ApiKeyStatus(StrEnum):
     active = "active"
     revoked = "revoked"
 
@@ -21,7 +25,7 @@ class ApiKey(Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False
     )
-    key_hash: Mapped[str] = mapped_column(String, nullable=False)
+    key_hash: Mapped[str] = mapped_column(String, nullable=False, index=True)
     prefix: Mapped[str | None] = mapped_column(String(8), nullable=True)
     status: Mapped[ApiKeyStatus] = mapped_column(
         Enum(ApiKeyStatus, name="api_key_status"), nullable=False, default=ApiKeyStatus.active

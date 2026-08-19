@@ -2,10 +2,11 @@
 
 Todo teste do core usa FakeBackend; Ollama/vLLM reais só nos testes de contrato.
 """
+
 import asyncio
+
 from shared.backends.protocol import (
     CancelToken,
-    InferenceBackend,
     InferenceRequest,
     InferenceResult,
 )

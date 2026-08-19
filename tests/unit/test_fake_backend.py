@@ -1,7 +1,9 @@
 import asyncio
+
 import pytest
-from shared.backends.fake import FakeBackend, BackendError
-from shared.backends.protocol import InferenceRequest, CancelToken
+
+from shared.backends.fake import BackendError, FakeBackend
+from shared.backends.protocol import CancelToken, InferenceRequest
 
 
 def make_request(job_id: str = "j_test") -> InferenceRequest:

@@ -38,26 +38,25 @@ Plataforma multi-tenant de inferência de IA assíncrona: recebe requisições v
 ### Setup
 
 ```bash
-# Criar ambiente virtual
-python -m venv .venv
-source .venv/bin/activate  # Linux/macOS
-
-# Instalar dependências
-pip install -e ".[dev]"
+# Instalar dependências reproduzíveis
+uv sync --frozen
 
 # Copiar variáveis de ambiente
 cp .env.example .env
 # Editar .env com suas configurações
 
-# Subir infra local
-docker compose up -d postgres rabbitmq minio redis
+# Subir API, worker, relay, migrações e infraestrutura
+docker compose up -d --build --wait
 
-# Aplicar migrações
-alembic upgrade head
-
-# Rodar testes
-pytest
+# Rodar testes e gates locais
+uv run pytest --cov
+uv run ruff check .
+uv run mypy api workers shared
 ```
+
+A API fica em `http://localhost:8000`, métricas do worker em
+`http://localhost:9100` e o painel RabbitMQ em `http://localhost:15672`.
+Use `API_PORT=18000 docker compose up -d` se a porta 8000 estiver ocupada.
 
 ## Workflow de desenvolvimento (spec-driven + TDD)
 

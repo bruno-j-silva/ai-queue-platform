@@ -1,6 +1,7 @@
-import enum
 import uuid
 from datetime import datetime
+from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Enum, ForeignKey, Integer
 from sqlalchemy.dialects.postgresql import UUID
@@ -8,8 +9,12 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from shared.db.base import Base
 
+if TYPE_CHECKING:
+    from shared.models.job import Job
+    from shared.models.webhook_endpoint import WebhookEndpoint
 
-class WebhookDeliveryStatus(str, enum.Enum):
+
+class WebhookDeliveryStatus(StrEnum):
     pending = "pending"
     delivering = "delivering"
     delivered = "delivered"

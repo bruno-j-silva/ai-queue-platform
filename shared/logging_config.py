@@ -1,5 +1,6 @@
 import logging
 import sys
+import time
 
 from pythonjsonlogger.json import JsonFormatter
 
@@ -25,13 +26,14 @@ def setup_logging(service_name: str, level: str = "INFO") -> None:
         fmt="%(asctime)s %(name)s %(levelname)s %(message)s",
         rename_fields={"asctime": "timestamp", "levelname": "level", "name": "logger"},
     )
-    formatter.converter = __import__("time").gmtime  # UTC timestamps
+    formatter.converter = time.gmtime  # UTC timestamps
 
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(formatter)
 
     root = logging.getLogger()
-    root.handlers = [handler]
+    if not any(isinstance(h, logging.StreamHandler) for h in root.handlers):
+        root.addHandler(handler)
     root.setLevel(level)
 
     # Silenciar libs verbosas

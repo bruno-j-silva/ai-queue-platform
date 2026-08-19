@@ -17,9 +17,8 @@ if database_url:
     config.set_main_option("sqlalchemy.url", database_url)
 
 # Import Base and all models so autogenerate can detect them
-from shared.db.base import Base  # noqa: E402
-
 import shared.models  # noqa: E402, F401 — registers all models on Base.metadata
+from shared.db.base import Base  # noqa: E402
 
 target_metadata = Base.metadata
 

@@ -1,10 +1,15 @@
 import uuid
+from typing import TYPE_CHECKING
 
 from sqlalchemy import ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from shared.db.base import Base
+
+if TYPE_CHECKING:
+    from shared.models.model_catalog import ModelCatalog
+    from shared.models.plan import Plan
 
 
 class PlanModel(Base):

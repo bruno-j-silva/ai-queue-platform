@@ -39,6 +39,11 @@ packages = ["api", "shared", "workers"]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[dependency-groups]
+dev = [
+    "aiosqlite>=0.22.1",
+]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
@@ -49,8 +54,7 @@ source = ["api", "workers", "shared"]
 omit = ["tests/*", "*/__init__.py", "*/migrations/*", "*/alembic/*"]
 
 [tool.coverage.report]
-# M0: 0 (scaffold sem código de domínio). Aumentar para 85 a partir do M1.
-fail_under = 0
+fail_under = 85
 
 [tool.ruff]
 line-length = 100

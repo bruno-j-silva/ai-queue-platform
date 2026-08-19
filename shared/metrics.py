@@ -2,6 +2,7 @@
 Métricas Prometheus da plataforma.
 Os incrementos acontecem nas fases M1–M7; aqui apenas a definição.
 """
+
 from prometheus_client import Counter, Gauge, Histogram
 
 # -- Contadores --

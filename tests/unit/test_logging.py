@@ -1,3 +1,4 @@
+import contextvars
 import logging
 
 from shared.context import get_correlation_ids, set_correlation_ids
@@ -18,7 +19,13 @@ def test_correlation_ids_default_none() -> None:
 
 
 def test_set_correlation_ids() -> None:
-    set_correlation_ids(job_id="j_123", tenant_id="t_abc")
-    ids = get_correlation_ids()
-    assert ids["job_id"] == "j_123"
-    assert ids["tenant_id"] == "t_abc"
+    ctx = contextvars.copy_context()
+
+    def _inner() -> None:
+        set_correlation_ids(job_id="j_123", tenant_id="t_abc", delivery_id="d_xyz")
+        ids = get_correlation_ids()
+        assert ids["job_id"] == "j_123"
+        assert ids["tenant_id"] == "t_abc"
+        assert ids["delivery_id"] == "d_xyz"
+
+    ctx.run(_inner)

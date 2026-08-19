@@ -1,17 +1,19 @@
 import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse
-from prometheus_client import generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
+from api.routes.jobs import router as jobs_router
 from shared.logging_config import setup_logging
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     setup_logging("api")
     logger.info("API iniciando")
     yield
@@ -24,6 +26,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.include_router(jobs_router)
+
 
 @app.get("/health")
 async def health() -> dict[str, str]:
@@ -31,5 +35,5 @@ async def health() -> dict[str, str]:
 
 
 @app.get("/metrics", response_class=PlainTextResponse)
-async def metrics() -> str:
-    return generate_latest().decode()
+async def metrics() -> PlainTextResponse:
+    return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)

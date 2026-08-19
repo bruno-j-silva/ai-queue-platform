@@ -1,5 +1,8 @@
 name: CI
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main, "feat/**"]
@@ -45,7 +48,7 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
       - run: pip install -e ".[dev]"
-      - run: pytest tests/unit/ -v --tb=short --cov --cov-report=term-missing
+      - run: pytest tests/unit/ tests/contract/ -v --tb=short --cov --cov-report=term-missing --cov-fail-under=0
 
   integration-tests:
     name: Integration Tests
@@ -97,12 +100,18 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
       - run: pip install -e ".[dev]"
-      - run: pytest tests/integration/ -v --tb=short
+      - run: pytest tests/unit/ tests/integration/ tests/contract/ -v --tb=short --cov --cov-report=term-missing
 
   e2e-tests:
     name: E2E Tests
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
+    env:
+      DATABASE_URL: postgresql+psycopg://enfila:enfila@localhost:5432/enfila
+      RABBITMQ_URL: amqp://enfila:enfila@localhost:5672/
+      REDIS_URL: redis://localhost:6379/0
+      BACKEND_MODE: fake
+      RUN_E2E: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -111,7 +120,7 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
       - run: pip install -e ".[dev]"
-      - run: docker compose up -d --wait --wait-timeout 120
+      - run: docker compose up -d --build --wait --wait-timeout 180
       - run: pytest tests/e2e/ -v --tb=short
       - run: docker compose down -v
         if: always()

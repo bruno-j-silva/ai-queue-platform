@@ -5,7 +5,8 @@ Revises:
 Create Date: 2024-01-01 00:00:00.000000
 
 """
-from typing import Sequence, Union
+
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
@@ -13,9 +14,9 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "0001"
-down_revision: Union[str, None] = None
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = None
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -143,7 +144,12 @@ def upgrade() -> None:
         sa.Column(
             "status",
             sa.Enum(
-                "queued", "running", "succeeded", "failed", "cancelled", "expired",
+                "queued",
+                "running",
+                "succeeded",
+                "failed",
+                "cancelled",
+                "expired",
                 name="job_status",
             ),
             nullable=False,
@@ -183,7 +189,12 @@ def upgrade() -> None:
         sa.Column(
             "from_status",
             sa.Enum(
-                "queued", "running", "succeeded", "failed", "cancelled", "expired",
+                "queued",
+                "running",
+                "succeeded",
+                "failed",
+                "cancelled",
+                "expired",
                 name="job_status",
                 create_type=False,
             ),
@@ -192,7 +203,12 @@ def upgrade() -> None:
         sa.Column(
             "to_status",
             sa.Enum(
-                "queued", "running", "succeeded", "failed", "cancelled", "expired",
+                "queued",
+                "running",
+                "succeeded",
+                "failed",
+                "cancelled",
+                "expired",
                 name="job_status",
                 create_type=False,
             ),
@@ -241,7 +257,10 @@ def upgrade() -> None:
         sa.Column(
             "status",
             sa.Enum(
-                "pending", "delivering", "delivered", "dead",
+                "pending",
+                "delivering",
+                "delivered",
+                "dead",
                 name="webhook_delivery_status",
             ),
             nullable=False,

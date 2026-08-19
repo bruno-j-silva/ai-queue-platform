@@ -1,6 +1,6 @@
 # SPEC-001 — Submissão e ciclo de vida de jobs
 
-- **Status:** Aprovada
+- **Status:** Implementada
 - **Milestone:** M1
 - **Requisitos:** RF-001..006, RF-050, RF-051, RNF-001
 - **ADRs:** ADR-001, ADR-006 (outbox)
