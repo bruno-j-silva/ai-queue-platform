@@ -6,7 +6,9 @@ from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
+from api.routes.admin_webhooks import router as admin_webhooks_router
 from api.routes.jobs import router as jobs_router
+from api.routes.webhook_endpoints import router as webhook_endpoints_router
 from shared.logging_config import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -27,6 +29,8 @@ app = FastAPI(
 )
 
 app.include_router(jobs_router)
+app.include_router(webhook_endpoints_router)
+app.include_router(admin_webhooks_router)
 
 
 @app.get("/health")

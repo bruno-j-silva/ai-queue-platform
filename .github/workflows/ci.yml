@@ -111,6 +111,9 @@ jobs:
       RABBITMQ_URL: amqp://enfila:enfila@localhost:5672/
       REDIS_URL: redis://localhost:6379/0
       BACKEND_MODE: fake
+      WEBHOOK_ALLOW_PRIVATE_URLS: "true"
+      WEBHOOK_RETRY_SCALE: "0"
+      ADMIN_API_TOKEN: test-admin-token
       RUN_E2E: "1"
     steps:
       - uses: actions/checkout@v4

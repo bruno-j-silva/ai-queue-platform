@@ -34,6 +34,8 @@ from shared.models import (  # noqa: F401 — registers all models in Base.metad
 )
 from shared.models.model_catalog import ModelBackend, ModelStatus
 from shared.models.tenant import TenantStatus
+from shared.models.webhook_delivery import WebhookDelivery, WebhookDeliveryStatus
+from shared.models.webhook_endpoint import WebhookEndpoint, WebhookEndpointStatus
 
 # ---------------------------------------------------------------------------
 # Module-scoped Postgres container + migration
@@ -414,3 +416,240 @@ async def test_spec001_ac07_timeout_above_plan_cap_422(
     # detail must mention the cap value
     detail = body.get("detail", "")
     assert str(seed_plan.max_timeout_seconds) in detail or "timeout" in detail.lower()
+
+
+@pytest.mark.integration
+async def test_spec003_submission_persists_owned_webhook_endpoint(
+    make_client,
+    async_session: AsyncSession,
+    seed_tenant: Tenant,
+    seed_model: ModelCatalog,
+    seed_plan_model: PlanModel,
+) -> None:
+    endpoint = WebhookEndpoint(
+        id=uuid.uuid4(),
+        tenant_id=seed_tenant.id,
+        url="https://8.8.8.8/callback",
+        secret_hash="hash",
+        secret_encrypted="encrypted",
+        status=WebhookEndpointStatus.active,
+    )
+    async_session.add(endpoint)
+    await async_session.flush()
+
+    async with make_client() as client:
+        response = await client.post(
+            "/v1/jobs",
+            json={
+                "model": seed_model.id,
+                "input": {"messages": [{"role": "user", "content": "Hello"}]},
+                "timeout_seconds": 30,
+                "webhook_endpoint_id": str(endpoint.id),
+            },
+        )
+
+    assert response.status_code == 202, response.text
+    job = await async_session.get(Job, uuid.UUID(response.json()["job_id"]))
+    assert job is not None
+    assert job.webhook_endpoint_id == endpoint.id
+
+
+@pytest.mark.integration
+async def test_webhook_endpoint_create_list_delete_hides_secret(
+    make_client,
+    seed_tenant: Tenant,
+) -> None:
+    async with make_client() as client:
+        created = await client.post(
+            "/v1/webhook-endpoints",
+            json={"url": "https://8.8.8.8/callback"},
+        )
+        assert created.status_code == 201, created.text
+        body = created.json()
+        assert body["secret"].startswith("whsec_")
+
+        listed = await client.get("/v1/webhook-endpoints")
+        assert listed.status_code == 200
+        assert listed.json()[0]["id"] == body["id"]
+        assert "secret" not in listed.json()[0]
+        assert "secret_hash" not in listed.json()[0]
+        assert "secret_encrypted" not in listed.json()[0]
+
+        deleted = await client.delete(f"/v1/webhook-endpoints/{body['id']}")
+        assert deleted.status_code == 204
+
+
+@pytest.mark.integration
+async def test_webhook_endpoint_test_creates_delivery(
+    make_client,
+    async_session: AsyncSession,
+) -> None:
+    from sqlalchemy import select
+
+    from shared.models.outbox import Outbox
+
+    async with make_client() as client:
+        created = await client.post(
+            "/v1/webhook-endpoints",
+            json={"url": "https://8.8.8.8/callback"},
+        )
+        endpoint_id = created.json()["id"]
+        response = await client.post(f"/v1/webhook-endpoints/{endpoint_id}/test")
+
+    assert response.status_code == 202, response.text
+    delivery_id = uuid.UUID(response.json()["delivery_id"])
+    delivery = await async_session.get(WebhookDelivery, delivery_id)
+    assert delivery is not None
+    assert delivery.event == "webhook.test"
+    outbox = (
+        await async_session.execute(
+            select(Outbox).where(
+                Outbox.topic == "webhooks.delivery",
+                Outbox.payload["delivery_id"].astext == str(delivery_id),
+            )
+        )
+    ).scalar_one()
+    assert outbox.payload["expected_attempt"] == 1
+
+
+@pytest.mark.integration
+async def test_spec003_ac06_admin_redeliver_from_dlq(
+    make_client,
+    async_session: AsyncSession,
+    seed_tenant: Tenant,
+) -> None:
+    from sqlalchemy import select
+
+    from shared.models.outbox import Outbox
+
+    endpoint = WebhookEndpoint(
+        id=uuid.uuid4(),
+        tenant_id=seed_tenant.id,
+        url="https://8.8.8.8/callback",
+        secret_hash="hash",
+        secret_encrypted="encrypted",
+        status=WebhookEndpointStatus.active,
+    )
+    delivery = WebhookDelivery(
+        id=uuid.uuid4(),
+        job_id=None,
+        endpoint_id=endpoint.id,
+        status=WebhookDeliveryStatus.dead,
+        attempt=5,
+        event="webhook.test",
+        payload={"status": "test"},
+        created_at=datetime.now(UTC),
+    )
+    async_session.add_all([endpoint, delivery])
+    await async_session.flush()
+
+    async with make_client() as client:
+        unauthorized = await client.post(
+            f"/admin/v1/dlq/webhooks/{delivery.id}/redeliver",
+        )
+        response = await client.post(
+            f"/admin/v1/dlq/webhooks/{delivery.id}/redeliver",
+            headers={"X-Admin-Token": "test-admin-token"},
+        )
+
+    assert unauthorized.status_code == 401
+    assert response.status_code == 202, response.text
+    assert response.json() == {"delivery_id": str(delivery.id), "expected_attempt": 6}
+    assert delivery.status == WebhookDeliveryStatus.pending
+    outbox = (
+        await async_session.execute(
+            select(Outbox).where(
+                Outbox.topic == "webhooks.delivery",
+                Outbox.payload["delivery_id"].astext == str(delivery.id),
+            )
+        )
+    ).scalar_one()
+    assert outbox.payload["expected_attempt"] == 6
+
+
+@pytest.mark.integration
+async def test_webhook_repository_list_and_disable(
+    async_session: AsyncSession,
+    seed_tenant: Tenant,
+) -> None:
+    from shared.repositories.webhook_repository import WebhookRepository
+
+    tenant_id = seed_tenant.id
+    repo = WebhookRepository(async_session)
+
+    ep1 = await repo.create(
+        tenant_id=tenant_id,
+        url="https://example.com/1",
+        secret_hash="h1",
+        secret_encrypted="e1",
+    )
+    ep2 = await repo.create(
+        tenant_id=tenant_id,
+        url="https://example.com/2",
+        secret_hash="h2",
+        secret_encrypted="e2",
+    )
+
+    listed = await repo.list_for_tenant(tenant_id)
+    assert {e.id for e in listed} == {ep1.id, ep2.id}
+
+    found = await repo.get_for_tenant(ep1.id, tenant_id, active_only=True)
+    assert found is not None
+
+    other_tenant = uuid.uuid4()
+    assert await repo.get_for_tenant(ep1.id, other_tenant) is None
+
+    assert await repo.disable(ep1.id, tenant_id) is True
+    assert await repo.get_for_tenant(ep1.id, tenant_id, active_only=True) is None
+    assert await repo.get_for_tenant(ep1.id, tenant_id, active_only=False) is not None
+
+    assert await repo.disable(uuid.uuid4(), tenant_id) is False
+
+
+@pytest.mark.integration
+async def test_admin_dlq_list_returns_dead_deliveries(
+    async_session: AsyncSession,
+    seed_tenant: Tenant,
+) -> None:
+    from api.routes.admin_webhooks import list_dead_webhooks
+    from shared.models.webhook_endpoint import WebhookEndpointStatus
+
+    endpoint = WebhookEndpoint(
+        id=uuid.uuid4(),
+        tenant_id=seed_tenant.id,
+        url="https://example.com/cb",
+        secret_hash="h",
+        secret_encrypted="e",
+        status=WebhookEndpointStatus.active,
+    )
+    dead_delivery = WebhookDelivery(
+        id=uuid.uuid4(),
+        job_id=None,
+        endpoint_id=endpoint.id,
+        status=WebhookDeliveryStatus.dead,
+        attempt=5,
+        event="webhook.test",
+        payload={"k": "v"},
+        last_response_code=503,
+        last_error="HTTP 503",
+        created_at=datetime.now(UTC),
+    )
+    pending_delivery = WebhookDelivery(
+        id=uuid.uuid4(),
+        job_id=None,
+        endpoint_id=endpoint.id,
+        status=WebhookDeliveryStatus.pending,
+        attempt=1,
+        event="webhook.test",
+        payload={"k": "v"},
+        created_at=datetime.now(UTC),
+    )
+    async_session.add_all([endpoint, dead_delivery, pending_delivery])
+    await async_session.flush()
+
+    result = await list_dead_webhooks(db=async_session)
+    assert len(result) == 1
+    assert result[0]["delivery_id"] == str(dead_delivery.id)
+    assert result[0]["attempt"] == 5
+    assert result[0]["last_response_code"] == 503
+    assert result[0]["last_error"] == "HTTP 503"

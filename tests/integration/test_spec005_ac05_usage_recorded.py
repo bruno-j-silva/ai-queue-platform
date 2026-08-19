@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from alembic import command
@@ -28,6 +28,8 @@ from shared.models import (  # noqa: F401 — registra todos os modelos no Base.
 from shared.models.job import JobStatus
 from shared.models.model_catalog import ModelBackend, ModelStatus
 from shared.models.tenant import TenantStatus
+from shared.models.webhook_delivery import WebhookDelivery, WebhookDeliveryStatus
+from shared.models.webhook_endpoint import WebhookEndpoint, WebhookEndpointStatus
 
 # ---------------------------------------------------------------------------
 # Fixtures: Postgres container + migrations (module-scoped)
@@ -270,3 +272,218 @@ async def test_spec005_ac05_backend_resolved_from_catalog(
     await async_session.refresh(job)
     assert job.status == JobStatus.succeeded
     assert job.usage is not None
+
+
+@pytest.mark.integration
+async def test_spec003_ac01_terminal_state_creates_delivery_same_tx(
+    async_session: AsyncSession,
+    seed_data: dict,
+) -> None:
+    from sqlalchemy import select
+
+    from shared.backends.fake import FakeBackend
+    from shared.models.outbox import Outbox
+    from shared.webhooks.secrets import encrypt_secret, generate_secret, hash_secret
+    from workers.inference_task import _process_job_async
+
+    secret = generate_secret()
+    endpoint = WebhookEndpoint(
+        id=uuid.uuid4(),
+        tenant_id=seed_data["tenant"].id,
+        url="https://8.8.8.8/callback",
+        secret_hash=hash_secret(secret),
+        secret_encrypted=encrypt_secret(secret, os.environ["WEBHOOK_ENCRYPTION_KEY"]),
+        status=WebhookEndpointStatus.active,
+    )
+    job = Job(
+        id=uuid.uuid4(),
+        tenant_id=seed_data["tenant"].id,
+        model_id=seed_data["model"].id,
+        webhook_endpoint_id=endpoint.id,
+        status=JobStatus.queued,
+        payload={"messages": [{"role": "user", "content": "webhook"}]},
+        timeout_seconds=30,
+        priority_weight=10,
+        attempt=0,
+        cancel_requested=False,
+        queued_at=datetime.now(UTC),
+    )
+    async_session.add(endpoint)
+    await async_session.flush()
+    async_session.add(job)
+    await async_session.flush()
+
+    await _process_job_async(str(job.id), session=async_session, backend_override=FakeBackend())
+
+    delivery = (
+        await async_session.execute(select(WebhookDelivery).where(WebhookDelivery.job_id == job.id))
+    ).scalar_one()
+    outbox = (
+        await async_session.execute(
+            select(Outbox).where(
+                Outbox.topic == "webhooks.delivery",
+                Outbox.payload["delivery_id"].astext == str(delivery.id),
+            )
+        )
+    ).scalar_one()
+    assert delivery.status == WebhookDeliveryStatus.pending
+    assert delivery.event == "job.succeeded"
+    assert delivery.payload["status"] == "succeeded"
+    assert outbox.payload["expected_attempt"] == 1
+
+
+async def _create_webhook_delivery(
+    async_session: AsyncSession,
+    seed_data: dict,
+    *,
+    attempt: int = 0,
+) -> WebhookDelivery:
+    from shared.webhooks.secrets import encrypt_secret, generate_secret, hash_secret
+
+    secret = generate_secret()
+    endpoint = WebhookEndpoint(
+        id=uuid.uuid4(),
+        tenant_id=seed_data["tenant"].id,
+        url="https://8.8.8.8/callback",
+        secret_hash=hash_secret(secret),
+        secret_encrypted=encrypt_secret(secret, os.environ["WEBHOOK_ENCRYPTION_KEY"]),
+        status=WebhookEndpointStatus.active,
+    )
+    delivery = WebhookDelivery(
+        id=uuid.uuid4(),
+        job_id=None,
+        endpoint_id=endpoint.id,
+        status=WebhookDeliveryStatus.pending,
+        attempt=attempt,
+        event="webhook.test",
+        payload={"status": "test"},
+        created_at=datetime.now(UTC),
+    )
+    async_session.add_all([endpoint, delivery])
+    await async_session.flush()
+    return delivery
+
+
+@pytest.mark.integration
+async def test_spec003_ac03_2xx_marks_delivered(
+    async_session: AsyncSession,
+    seed_data: dict,
+) -> None:
+    import httpx
+
+    from workers.webhook_task import dispatch_delivery_async
+
+    delivery = await _create_webhook_delivery(async_session, seed_data)
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(204)))
+    await dispatch_delivery_async(
+        str(delivery.id),
+        1,
+        session=async_session,
+        client=client,
+        jitter_factor=1.0,
+    )
+    await client.aclose()
+
+    assert delivery.status == WebhookDeliveryStatus.delivered
+    assert delivery.attempt == 1
+    assert delivery.delivered_at is not None
+    assert delivery.next_attempt_at is None
+
+
+@pytest.mark.integration
+async def test_spec003_ac04_retry_backoff_schedule(
+    async_session: AsyncSession,
+    seed_data: dict,
+) -> None:
+    import httpx
+
+    from shared.clock import FakeClock
+    from workers.webhook_task import dispatch_delivery_async
+
+    delivery = await _create_webhook_delivery(async_session, seed_data)
+    clock = FakeClock()
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(500)))
+    await dispatch_delivery_async(
+        str(delivery.id),
+        1,
+        session=async_session,
+        client=client,
+        clock=clock,
+        jitter_factor=1.0,
+    )
+    await client.aclose()
+
+    assert delivery.status == WebhookDeliveryStatus.pending
+    assert delivery.attempt == 1
+    assert delivery.next_attempt_at == clock.now() + timedelta(seconds=60)
+    assert delivery.last_response_code == 500
+
+
+@pytest.mark.integration
+async def test_spec003_ac05_exhausted_goes_to_dlq_with_metric(
+    async_session: AsyncSession,
+    seed_data: dict,
+) -> None:
+    import httpx
+    from sqlalchemy import select
+
+    from shared.metrics import webhook_dead_total
+    from shared.models.outbox import Outbox
+    from workers.webhook_task import dispatch_delivery_async
+
+    delivery = await _create_webhook_delivery(async_session, seed_data, attempt=4)
+    before = webhook_dead_total._value.get()
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(503)))
+    await dispatch_delivery_async(
+        str(delivery.id),
+        5,
+        session=async_session,
+        client=client,
+        jitter_factor=1.0,
+    )
+    await client.aclose()
+
+    dlq = (
+        await async_session.execute(
+            select(Outbox).where(
+                Outbox.topic == "webhooks.dlq",
+                Outbox.payload["delivery_id"].astext == str(delivery.id),
+            )
+        )
+    ).scalar_one()
+    assert delivery.status == WebhookDeliveryStatus.dead
+    assert delivery.attempt == 5
+    assert delivery.next_attempt_at is None
+    assert dlq.payload["attempt"] == 5
+    assert webhook_dead_total._value.get() == before + 1
+
+
+@pytest.mark.integration
+async def test_spec003_retry_poller_enqueues_due_delivery_once(
+    async_session: AsyncSession,
+    seed_data: dict,
+) -> None:
+    from sqlalchemy import select
+
+    from shared.clock import FakeClock
+    from shared.models.outbox import Outbox
+    from workers.webhook_retry_poller import enqueue_due_deliveries
+
+    delivery = await _create_webhook_delivery(async_session, seed_data, attempt=1)
+    clock = FakeClock()
+    delivery.next_attempt_at = clock.now() - timedelta(seconds=1)
+    await async_session.flush()
+
+    assert await enqueue_due_deliveries(async_session, clock=clock) == 1
+    assert await enqueue_due_deliveries(async_session, clock=clock) == 0
+
+    outbox = (
+        await async_session.execute(
+            select(Outbox).where(
+                Outbox.topic == "webhooks.delivery",
+                Outbox.payload["delivery_id"].astext == str(delivery.id),
+            )
+        )
+    ).scalar_one()
+    assert outbox.payload["expected_attempt"] == 2
+    assert delivery.next_attempt_at is None

@@ -41,6 +41,7 @@ class JobRepository:
         timeout_seconds: int,
         priority_weight: int,
         idempotency_key: str | None = None,
+        webhook_endpoint_id: uuid.UUID | None = None,
     ) -> Job:
         """
         Creates a Job in 'queued' status and adds it to the session.
@@ -55,6 +56,7 @@ class JobRepository:
             timeout_seconds=timeout_seconds,
             priority_weight=priority_weight,
             idempotency_key=idempotency_key,
+            webhook_endpoint_id=webhook_endpoint_id,
             queued_at=datetime.now(UTC),
             cancel_requested=False,
             attempt=0,

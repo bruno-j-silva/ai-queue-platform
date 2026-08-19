@@ -9,6 +9,11 @@ import pytest
 os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://stub:stub@localhost/stub")
 os.environ.setdefault("RABBITMQ_URL", "amqp://enfila:enfila@localhost:5672/")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+os.environ.setdefault(
+    "WEBHOOK_ENCRYPTION_KEY",
+    "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+)
+os.environ.setdefault("ADMIN_API_TOKEN", "test-admin-token")
 
 
 def pytest_configure(config: pytest.Config) -> None:

@@ -27,6 +27,7 @@ class WebhookEndpoint(Base):
     )
     url: Mapped[str] = mapped_column(String, nullable=False)
     secret_hash: Mapped[str] = mapped_column(String, nullable=False)
+    secret_encrypted: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[WebhookEndpointStatus] = mapped_column(
         Enum(WebhookEndpointStatus, name="webhook_endpoint_status"),
         nullable=False,

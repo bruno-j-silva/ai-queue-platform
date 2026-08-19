@@ -107,18 +107,26 @@ async def relay_once(
 
         payload = raw_payload if isinstance(raw_payload, dict) else json.loads(raw_payload)
         headers: dict[str, Any] | None = None
-        if topic == "inference.dispatch":
+        celery_tasks = {
+            "inference.dispatch": "workers.inference.process_job",
+            "webhooks.delivery": "workers.webhooks.dispatch",
+        }
+        if topic in celery_tasks:
             task_id = str(uuid.uuid4())
+            if topic == "inference.dispatch":
+                args = [payload["job_id"]]
+            else:
+                args = [payload["delivery_id"], payload["expected_attempt"]]
             body = json.dumps(
                 [
-                    [payload["job_id"]],
+                    args,
                     {},
                     {"callbacks": None, "errbacks": None, "chain": None, "chord": None},
                 ]
             ).encode()
             headers = {
                 "lang": "py",
-                "task": "workers.inference.process_job",
+                "task": celery_tasks[topic],
                 "id": task_id,
                 "root_id": task_id,
                 "retries": 0,
@@ -171,6 +179,11 @@ async def run_relay_loop(
     connection = await aio_pika.connect_robust(rabbitmq_url)
     async with connection:
         channel = await connection.channel()
+        await channel.declare_queue(
+            "webhooks.dlq",
+            durable=True,
+            arguments={"x-queue-type": "quorum"},
+        )
         logger.info("Outbox relay started (poll_interval=%.2fs)", POLL_INTERVAL_SECONDS)
         while True:
             db = await db_factory()

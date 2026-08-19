@@ -15,7 +15,7 @@
 | F0 | M0 — Fundação | ✅ | — (infra DoD ✅) | scaffold | ✅ | [M0](./checks/M0.md) |
 | F1 | M1 — Submissão e ciclo de vida | ✅ | 8/8 (+I1) | ≥85% | ✅ | [M1](./checks/M1.md) |
 | F2 | M2 — Worker + Ollama (texto) | ✅ | 6/6 | 86,88% global | ✅ | [M2](./checks/M2.md) |
-| F3 | M3 — Webhook delivery | ⬜ | 0/8 | — | ⬜ | [M3](./checks/M3.md) |
+| F3 | M3 — Webhook delivery | ✅ | 8/8 | ≥85% | ✅ | [M3](./checks/M3.md) |
 | F4 | M4 — Priorização por plano | ⬜ | 0/5 | — | ⬜ | [M4](./checks/M4.md) |
 | F5 | M5 — Cancelamento | ⬜ | 0/6 (+corrida) | — | ⬜ | [M5](./checks/M5.md) |
 | F6 | M6 — Multimodal + vLLM | ⬜ | 0/8 | — | ⬜ | [M6](./checks/M6.md) |
@@ -30,16 +30,16 @@
 M0 [████████████████████] 100% ✅
 M1 [████████████████████] 100% ✅
 M2 [████████████████████] 100% ✅
-M3 [                    ] 0%
+M3 [████████████████████] 100% ✅
 M4 [                    ] 0%
 M5 [                    ] 0%
 M6 [                    ] 0%
 M7 [                    ] 0%
 ```
-**MVP: 3/8 milestones concluídos.**
+**MVP: 4/8 milestones concluídos.**
 
 ## Progresso do projeto completo (M0–M8)
-**3/9 milestones concluídos.**
+**4/9 milestones concluídos.**
 
 ## Grafo de dependências
 ```

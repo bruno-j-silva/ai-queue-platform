@@ -13,7 +13,7 @@ app = Celery(
     "enfila",
     broker=os.environ["RABBITMQ_URL"],
     backend=os.environ["REDIS_URL"],
-    include=["workers.inference_task"],
+    include=["workers.inference_task", "workers.webhook_task"],
 )
 
 app.conf.update(
@@ -32,6 +32,11 @@ app.conf.update(
         Queue(
             "inference.dispatch",
             routing_key="inference.dispatch",
+            queue_arguments={"x-queue-type": "quorum"},
+        ),
+        Queue(
+            "webhooks.delivery",
+            routing_key="webhooks.delivery",
             queue_arguments={"x-queue-type": "quorum"},
         ),
     ),

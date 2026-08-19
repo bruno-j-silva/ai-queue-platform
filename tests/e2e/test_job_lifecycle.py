@@ -80,6 +80,14 @@ async def test_submit_is_processed_and_result_is_retrievable() -> None:
 
     headers = {"Authorization": f"Bearer {raw_key}", "Idempotency-Key": str(uuid.uuid4())}
     async with httpx.AsyncClient(base_url=api_url, timeout=10) as client:
+        endpoint_response = await client.post(
+            "/v1/webhook-endpoints",
+            headers=headers,
+            json={"url": "https://host.docker.internal:1/callback"},
+        )
+        assert endpoint_response.status_code == 201, endpoint_response.text
+        endpoint_id = endpoint_response.json()["id"]
+
         response = await client.post(
             "/v1/jobs",
             headers=headers,
@@ -87,6 +95,7 @@ async def test_submit_is_processed_and_result_is_retrievable() -> None:
                 "model": model_id,
                 "input": {"messages": [{"role": "user", "content": "smoke"}]},
                 "timeout_seconds": 30,
+                "webhook_endpoint_id": endpoint_id,
             },
         )
         assert response.status_code == 202, response.text
@@ -104,4 +113,46 @@ async def test_submit_is_processed_and_result_is_retrievable() -> None:
     body = result.json()
     assert body["result"]["output"][0]["text"] == "fake response"
     assert body["usage"]["backend"] == "fake"
+
+    admin_headers = {"X-Admin-Token": os.environ.get("ADMIN_API_TOKEN", "test-admin-token")}
+    async with httpx.AsyncClient(base_url=api_url, timeout=10) as client:
+        for _ in range(80):
+            dead_response = await client.get(
+                "/admin/v1/dlq/webhooks",
+                headers=admin_headers,
+            )
+            assert dead_response.status_code == 200, dead_response.text
+            dead = dead_response.json()
+            if dead:
+                break
+            await asyncio.sleep(0.25)
+        else:
+            pytest.fail("webhook delivery did not reach DLQ")
+
+        delivery_id = dead[0]["delivery_id"]
+        assert dead[0]["attempt"] == 5
+
+        still_available = await client.get(f"/v1/jobs/{job_id}", headers=headers)
+        assert still_available.status_code == 200
+        assert still_available.json()["status"] == "succeeded"
+        assert still_available.json()["result"] == body["result"]
+
+        redelivered = await client.post(
+            f"/admin/v1/dlq/webhooks/{delivery_id}/redeliver",
+            headers=admin_headers,
+        )
+        assert redelivered.status_code == 202, redelivered.text
+        assert redelivered.json() == {
+            "delivery_id": delivery_id,
+            "expected_attempt": 6,
+        }
+
+        for _ in range(40):
+            retried = await client.get("/admin/v1/dlq/webhooks", headers=admin_headers)
+            matching = [item for item in retried.json() if item["delivery_id"] == delivery_id]
+            if matching and matching[0]["attempt"] == 6:
+                break
+            await asyncio.sleep(0.25)
+        else:
+            pytest.fail("admin redelivery did not execute attempt 6")
     await engine.dispose()

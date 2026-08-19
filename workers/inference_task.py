@@ -16,6 +16,7 @@ from shared.domain.state_machine import JobEvent as StateMachineEvent
 from shared.domain.state_machine import transition
 from shared.models.job import Job, JobStatus
 from shared.models.job_event import JobEvent
+from shared.webhooks.service import create_terminal_delivery
 from workers.celery_app import app
 
 if TYPE_CHECKING:
@@ -182,5 +183,6 @@ async def _process_job_async(
             created_at=now,
         )
     )
+    await create_terminal_delivery(session, job)
 
     await session.flush()

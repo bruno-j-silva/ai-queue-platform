@@ -1,6 +1,6 @@
 # SPEC-003 — Entrega de resultados via webhook
 
-- **Status:** Aprovada
+- **Status:** Implementada
 - **Milestone:** M3
 - **Requisitos:** RF-040..044, RB-04
 - **ADRs:** ADR-006

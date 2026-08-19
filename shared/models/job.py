@@ -37,6 +37,9 @@ class Job(Base):
         UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
     )
     model_id: Mapped[str] = mapped_column(String, ForeignKey("models.id"), nullable=False)
+    webhook_endpoint_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("webhook_endpoints.id"), nullable=True
+    )
     status: Mapped[JobStatus] = mapped_column(
         Enum(JobStatus, name="job_status"), nullable=False, default=JobStatus.queued
     )

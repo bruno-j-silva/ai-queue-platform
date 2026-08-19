@@ -28,6 +28,7 @@ from shared.models.plan import Plan
 from shared.models.plan_model import PlanModel
 from shared.models.tenant import Tenant, TenantStatus
 from shared.repositories.job_repository import JobRepository
+from shared.repositories.webhook_repository import WebhookRepository
 
 router = APIRouter(prefix="/v1/jobs", tags=["jobs"])
 
@@ -51,7 +52,7 @@ class JobSubmitRequest(BaseModel):
     model: str
     input: JobInput
     timeout_seconds: int = Field(gt=0)
-    webhook_endpoint_id: str | None = None
+    webhook_endpoint_id: uuid.UUID | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -215,6 +216,19 @@ async def submit_job(
             max_timeout=plan.max_timeout_seconds,
         )
 
+    if request.webhook_endpoint_id is not None:
+        endpoint = await WebhookRepository(db).get_for_tenant(
+            request.webhook_endpoint_id,
+            tenant_id,
+            active_only=True,
+        )
+        if endpoint is None:
+            return problem_response(
+                422,
+                "Webhook Endpoint Not Found",
+                "Webhook endpoint is missing, disabled, or belongs to another tenant.",
+            )
+
     payload = request.input.model_dump()
     if request.metadata:
         payload["metadata"] = request.metadata
@@ -236,6 +250,7 @@ async def submit_job(
                 timeout_seconds=request.timeout_seconds,
                 priority_weight=plan.priority_weight,
                 idempotency_key=idempotency_key,
+                webhook_endpoint_id=request.webhook_endpoint_id,
             )
 
             outbox_entry = _create_outbox_entry(job, plan.priority_weight)

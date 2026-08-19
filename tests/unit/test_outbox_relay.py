@@ -109,7 +109,7 @@ async def test_relay_once_publishes_pending_messages(db_session: AsyncSession) -
     from workers.outbox_relay import relay_once
 
     await _insert_outbox(db_session, "inference.dispatch", {"job_id": "abc"})
-    await _insert_outbox(db_session, "webhooks.delivery", {"url": "https://example.com"})
+    await _insert_outbox(db_session, "webhooks.delivery", {"delivery_id": "del-1", "expected_attempt": 1})
 
     channel = _make_channel()
     count = await relay_once(db_session, channel)
@@ -193,6 +193,26 @@ async def test_relay_once_publishes_correct_payload(db_session: AsyncSession) ->
     assert message.headers["task"] == "workers.inference.process_job"
     assert message.headers["id"]
     assert routing_key == "inference.dispatch"
+
+
+@pytest.mark.asyncio
+async def test_relay_once_encodes_webhook_celery_task(db_session: AsyncSession) -> None:
+    """SPEC-003/AC-01: webhook outbox entries invoke the dispatcher task."""
+    import aio_pika
+
+    from workers.outbox_relay import relay_once
+
+    payload = {"delivery_id": "delivery-1", "expected_attempt": 3}
+    await _insert_outbox(db_session, "webhooks.delivery", payload)
+    channel = _make_channel()
+
+    await relay_once(db_session, channel)
+
+    publish_call = channel.default_exchange.publish.await_args
+    message: aio_pika.Message = publish_call.args[0]
+    assert json.loads(message.body)[0] == ["delivery-1", 3]
+    assert message.headers["task"] == "workers.webhooks.dispatch"
+    assert publish_call.kwargs["routing_key"] == "webhooks.delivery"
 
 
 @pytest.mark.asyncio
