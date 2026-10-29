@@ -1,6 +1,6 @@
 FROM ghcr.io/astral-sh/uv:0.8.13 AS uv
 
-FROM python:3.12.11-slim-bookworm AS runtime
+FROM python:3.15.0-slim-bookworm AS runtime
 
 ENV PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:$PATH"
